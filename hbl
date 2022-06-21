@@ -1,0 +1,277 @@
+#!/bin/python3
+# -*- coding: utf-8 -*-
+from xml.dom import minidom
+import unidecode
+import sys
+import difflib
+import getopt
+import re
+import unicodedata
+usage = "usage: hbl [options] <hebrew word>\nuse --help for more info"
+xmlfile = 'HebrewStrong.xml'
+
+help_text = """\
+usage: hbl [options] <word>
+
+Look up the Strong's lexicon of a Hebrew word.
+Options:
+ -n, --number               Display the Strong's number.
+ -u, --unicode              Display the word in unicode.
+ -t, --transliteration      Display the transliteration.
+ -p, --pronunciation        Display the pronunciation.
+ -s, --strongs-definition   Display the Strong's definiton.
+ -k, --kjv-definition       Display the KJV definition.
+ -o, --origin               Display the origin of the word.
+ -S, --strict               Output only, if the word has an exact match, otherwise exit(1).
+ -q, --quiet                Only display the attributes. Each attribute will be seperated with a tab.
+                            The order of each attribute is number, unicode, transliteration, pronunciation, strongs-definition, kjv-definition, origin.
+ -d, --default              Select the first similar word without asking anything.
+ -r, --rtl                  Reverse the Hebrew letters, in case the terminal does not support Right-to-Left languages.
+ -h, --help                 Show this message
+
+When no options are supplied the program will output the Strong's number, unicode, pronunciation, KJV definition, Strong's definition and origin.
+Examples:
+    Only output the KJV definition of אַח
+        hbl -k אַח
+    You can find some words using the rough transliteraion of it
+        hbl adonay
+"""
+
+def main(argv):
+    # Default options
+    numberOption = True
+    unicodeOption = True
+    transliterationOption = False
+    pronunciationOption = True
+    strongs_defOption = True
+    kjv_defOption = True
+    originOption = True
+    strictOption = False
+    quietOption = False
+    rtlOption = False
+    defaultOption = False
+
+    try:
+        opts, args = getopt.getopt(argv,"nutpskoSqdrh",["number","unicode","transliteration","pronunciation","strongs-definition","kjv-definition", "origin","strict","quiet","default","rtl","help"])
+    except getopt.GetoptError:
+        print(usage)
+        sys.exit(2)
+    
+    if (len([o for o,a in opts if o not in ("-r", "--rtl")])) > 0: # Disable the default options, when an option is selected
+            
+            numberOption = False
+            unicodeOption = False
+            transliterationOption = False
+            pronunciationOption = False
+            strongs_defOption = False
+            kjv_defOption = False
+            usageOption = True
+            strictOption = False
+            quietOption = False
+            defaultOption = False
+            rtlOption = False
+            originOption = False
+
+    for opt, arg in opts:
+        if opt in ("-h", "--help"):
+            print(help_text)
+            sys.exit()
+
+        if opt in ("-n", "--number"):
+            numberOption = True
+        if opt in ("-u", "--unicode"):
+            unicodeOption = True
+        if opt in ("-t", "--transliteration"):
+            transliterationOption = True
+        if opt in ("-p", "--pronunciation"):
+            pronunciationOption = True
+        if opt in ("-s", "--strongs-definition"):
+            strongs_defOption = True
+        if opt in ("-k", "--kjv-definition"):
+            kjv_defOption = True
+            usageOption = True
+        if opt in ("-o", "--origin"):
+            originOption = True
+        if opt in ("-S", "--strict"):
+            strictOption = True
+        if opt in ("-q", "--quiet"):
+            quietOption = True
+        if opt in ("-r", "--rtl"):
+            rtlOption = True
+        if opt in ("-d", "--default"):
+            defaultOption = True
+
+    dom = minidom.parse(xmlfile)
+    
+    def removeNikkud(word):
+        normalized = unicodedata.normalize('NFKD', word)
+        result=''.join([c for c in normalized if not unicodedata.combining(c)])
+        return result
+    def deunicode(word):
+        return unidecode.unidecode(word.lower())
+
+    def printHebrew(unicode):
+        if rtlOption:
+            result = ""
+            normalized = unicodedata.normalize('NFKD', unicode)
+            nikkudChars = []
+            for c in normalized[::-1]:
+                if unicodedata.combining(c):
+                    nikkudChars.append(c)
+                else:
+                    
+                    result = result + c +''.join(nikkudChars[::-1])  
+                    nikkudChars = []
+
+            return result
+        else: 
+            return unicode
+    def printDefinition(number, unicode, translit, pronunciation, source, meaning, usage):
+        outputString = ""
+        if quietOption:
+            if numberOption:
+                outputString += number + "\t"
+            if unicodeOption:
+                outputString += printHebrew(unicode) + "\t"
+            if transliterationOption:
+                outputString += translit + "\t"
+            if pronunciationOption:
+                outputString += pronunciation + "\t"
+            if sourceOption:
+                outputString += source + "\t"
+            if strongs_defOption:
+                outputString += meaning+ "\t"
+            if originOption:
+                outputString += usage + "\t"
+        else:
+            if unicodeOption:
+                outputString += "Word: " + printHebrew(unicode)  + " "
+                if transliterationOption:
+                    outputString += "[" + translit + "]"
+                if numberOption:
+                    outputString +=  "\nStrong's number: " + number
+                outputString += "\n"
+            else:
+                if transliterationOption:
+                    outputString += "Transliteraion: " + translit + "\n"
+                if numberOption:
+                    outputString +=  "Strong's number: " + number + "\n"
+            if pronunciationOption:
+                outputString += "Pronunciation: " + pronunciation + "\n"
+            if strongs_defOption:
+                outputString += "Strong's defintion: " + meaning + "\n"
+            if kjv_defOption:
+                outputString += "KJV definition: " + usage + "\n"
+            if originOption:
+                outputString += "Origin: " + source + "\t"
+
+        print(outputString.strip())
+            
+
+    def getText(nodelist):
+        rc = []
+        for node in nodelist:
+            if node.nodeType == node.TEXT_NODE:
+                rc.append(node.data)
+            elif 'src' in node.attributes:
+                rc.append(node.attributes['src'].value)
+            elif node.nodeName == 'def':
+                rc.append(getText(node.childNodes))
+        return ''.join(rc)
+    
+    def querydata(query):
+        words = []
+        for entry in dom.getElementsByTagName("entry"):        
+            number = entry.attributes['id'].value[1:] #Strong's number
+            unicode = "data_not_set"
+            translit = "data_not_set"
+            pronunciation = "data_not_set"
+
+            source = "data_not_set"
+            meaning = "data_not_set"
+            usage = "data_not_set"
+
+            unicode = getText(entry.getElementsByTagName('w')[0].childNodes)
+            translit = entry.getElementsByTagName('w')[0].attributes['xlit'].value
+            pronunciation = entry.getElementsByTagName('w')[0].attributes['pron'].value
+
+            try:
+                source = getText(entry.getElementsByTagName("source")[0].childNodes)
+            except:
+                pass
+
+            try:
+                meaning = getText(entry.getElementsByTagName("meaning")[0].childNodes)
+            except:
+                pass
+
+            try:
+                usage = getText(entry.getElementsByTagName("usage")[0].childNodes)
+            except:
+                pass
+                
+            if removeNikkud(query) == removeNikkud(unicode):
+
+                return (True, (number, unicode, translit, pronunciation, source, meaning, usage))
+
+            words.append((deunicode(unicode), removeNikkud(unicode), deunicode(translit).replace('ʼ','').replace('`','').replace("'",""),  unicode, number,(number, unicode, translit, pronunciation, source, meaning, usage)))
+
+        return (False, words)
+
+    def findSimilar(query, words):
+        similar = []
+        
+        for w in words:
+            if removeNikkud(query) == w[1]:
+                similar.append(w) #Append unicode version
+            elif difflib.SequenceMatcher(a=deunicode(query), b=w[2]).ratio() > 0.80:
+                similar.append(w) #Append unicode version
+            
+        return(similar)
+
+    def similarSelection(similar):
+        if (len(similar) > 1):
+            print("No exact match, but these words are similar:")
+            for i in range(0, len(similar)):
+                print("[" + str(i + 1) + "] " + printHebrew(similar[i][3]) + " (#" + similar[i][4] + ")")
+            while True:
+                inputC = input("Enter a number or 'q' to quit [default is 1]: ")
+                try:  
+                    if int(inputC) in range(1, len(similar) + 1) :
+                        return (int(inputC) - 1)
+                except:
+                    if inputC == "":
+                        return 0
+
+                    if inputC == "q":
+                        sys.exit(1)
+        else:
+            return 0
+
+
+    found = querydata(argv[-1])
+
+    if (found[0] == True):
+        printDefinition(*found[1])
+        sys.exit(0)
+    elif not strictOption:
+        similar = findSimilar(argv[-1], found[1])
+        if len(similar) == 0:
+            print("No match or similar match found!")
+            sys.exit(1) 
+        
+        if defaultOption:
+            printDefinition(*similar[0][5])
+        else:
+            printDefinition(*similar[similarSelection(similar)][5])
+        sys.exit(0)
+
+    sys.exit(1)
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(usage)
+        sys.exit(2)
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        sys.exit(0)
